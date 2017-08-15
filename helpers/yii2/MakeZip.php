@@ -51,7 +51,7 @@ class MakeZip
         $ret = $z->open($outZipPath, ZipArchive::OVERWRITE);
         if ($ret === ZipArchive::ER_NOENT)
             $z->open($outZipPath, ZipArchive::CREATE);
-        else return self::zipStatusString($ret);
+        elseif ($ret !== ZipArchive::ER_MULTIDISK) return self::zipStatusString($ret);
 
         $z->addEmptyDir($dirName);
         self::folderToZip($sourcePath, $z, strlen("$parentPath/"));
@@ -99,7 +99,7 @@ class MakeZip
         if ($ret === ZipArchive::ER_NOENT) {
             $ret = $z->open($outZipPath, ZipArchive::CREATE);
             if ($ret !== true) return self::zipStatusString($ret);
-        } else return self::zipStatusString($ret);
+        } elseif ($ret !== true) return self::zipStatusString($ret);
 
         $options = ['add_path' => $prefix, 'remove_all_path' => boolval($removeAllPath)];
 
@@ -110,13 +110,15 @@ class MakeZip
             $sfiles = implode("|", $files['extensions']);
             if (empty($pattern)) $pattern = '\.(?:' . $sfiles . ')';
             else $pattern .= '|\.(?:' . $sfiles . ')';
-        } elseif (! isset($files['files'], $files['extensions'])) {
+        } elseif (! isset($files['files']) && ! isset($files['extensions'])) {
             $sfiles = implode("|", $files);
             $pattern = '\.(?:' . $sfiles . ')';
         }
 
         $ret = $z->addPattern('/' . $pattern . '$/', $filesPath, $options);
-        if ($ret !== true) return self::zipStatusString(ZipArchive::ER_WRITE);
+        if (! $ret) {
+            return self::zipStatusString(ZipArchive::ER_WRITE);
+        }
 
         $ret = $z->close();
         if ($ret !== true) return self::zipStatusString($ret);
@@ -162,42 +164,47 @@ class MakeZip
 
         $ret = true;
         if (empty($files)) {
-            foreach (glob("*.*") as $file) {
-                $ret &= unlink($filesPath . $file);
+            $files = array_diff(scandir($filesPath), array('.','..'));
+            foreach ($files as $file) {
+                if (is_dir($filesPath . $file)) $ret &= self::delTree($filesPath . $file);
+                else $ret &= unlink($filesPath . $file);
+
                 if (! $ret) return self::zipStatusString(ZipArchive::ER_REMOVE);
             }
         } else {
-            if (isset($files['files'])) {
-                foreach ($files['files'] as $file) {
-                    $ret &= unlink($filesPath . $file);
-                    if (! $ret) return self::zipStatusString(ZipArchive::ER_REMOVE);
-                }
-            }
+            $extensions = null;
+            $fileName = null;
+            if (isset($files['files'])) $fileName = $files['files'];
 
-            if (isset($files['extensions'])) {
-                $sExtensions = implode(",", $files['extensions']);
-                foreach (glob("*.{" . $sExtensions . "}") as $file) {
-                    $ret &= unlink($filesPath . $file);
-                    if (! $ret) return self::zipStatusString(ZipArchive::ER_REMOVE);
-                }
-            } elseif (! isset($files['files'], $files['extensions'])) {
-                $sExtensions = implode(",", $files);
-                foreach (glob("*.{" . $sExtensions . "}") as $file) {
-                    $ret &= unlink($filesPath . $file);
-                    if (! $ret) return self::zipStatusString(ZipArchive::ER_REMOVE);
+            if (isset($files['extensions'])) $extensions = $files['extensions'];
+            elseif (! isset($files['files']) && ! isset($files['extensions'])) $extensions = $files;
+
+            if (is_dir($filesPath)) {
+                if ($dh = opendir($filesPath)) {
+                    while (($file = readdir($dh)) !== false) {
+                        if (! empty($extensions) && in_array(pathinfo($file)['extension'], $extensions)) {
+                            $ret &= unlink($filesPath . $file);
+                            if (! $ret) return self::zipStatusString(ZipArchive::ER_REMOVE);
+                        }
+                        if (! empty($fileName) && in_array(pathinfo($file)['basename'], $fileName)) {
+                            $ret &= unlink($filesPath . $file);
+                            if (! $ret) return self::zipStatusString(ZipArchive::ER_REMOVE);
+                        }
+                    }
+                    closedir($dh);
                 }
             }
         }
         return $ret;
     }
 
-    private static function delTree($dir, $delete = false)
+    private static function delTree($dir, $delete = true)
     {
         if (empty($delete)) return true;
 
         $files = array_diff(scandir($dir), array('.','..'));
         foreach ($files as $file) {
-            (is_dir("$dir/$file")) ? delTree("$dir/$file") : unlink("$dir/$file");
+            (is_dir($dir . $file)) ? delTree($dir . $file) : unlink($dir . $file);
         }
         return rmdir($dir);
     }
